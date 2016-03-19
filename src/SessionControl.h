@@ -17,91 +17,108 @@
 #include <map>
 #include <thread>
 #include <glibmm-2.4/glibmm.h>
-#include <json/json.h>
 
 #include "VlcDBusInterface.h"
-
-struct s_station
-{
-    unsigned int id;
-    std::string name;
-    std::string address;
-    std::string genre;
-    std::string country;
-    std::string city;
-    std::string datetime;
-    std::vector<std::string> tags;
-};
-
-struct s_track
-{
-    unsigned int id;
-    std::string artist;
-    std::string title;
-    std::string station;
-    std::string year;
-    std::string datetime;
-    std::string url_discogs;
-    std::string url_youtube;
-};
+#include "stations.h"
+#include "tracks.h"
 
 class SessionControl {
     int pid;
     std::string user_homedir;
     std::string user_tmpdir;
-    std::string user_init_keyfile;
+    //std::string user_init_keyfile;
     
-    const std::string app_dir{".gats/inetradiofavs"};
-    const std::string app_initkeyfile{".gats/inetradiofavs/init.keyfile"};
-    const std::string app_db_station{"stations.db"};
-    const std::string app_db_tracks{"tracks.db"};
+    /* user paths */
+    Glib::ustring app_dir{".gats/inetradiofavs"};
+    Glib::ustring app_user_db_dir{".gats/inetradiofavs"};
+    Glib::ustring app_initkeyfile{"init.keyfile"};
+    Glib::ustring app_db_stations;
+    Glib::ustring app_db_stations_selections;
+    Glib::ustring app_db_tracks;
+    Glib::ustring app_db_tracks_selections;
     
+    /* program settings */
+    std::map<Glib::ustring,Glib::ustring> m_programsettings{}; 
+    
+    /* last session settings*/
+    std::vector<unsigned int> v_recentstations{};
+    
+    /* player interface */
     std::string app_player_interface;
     std::string app_vlc_pidfile;
     std::string app_lang;
+       
+    /* current settings */
+    gats::s_station current_station;
+    unsigned int    current_station_id;
+    std::string     current_track_artist;
+    std::string     current_track_title;
+    unsigned int    current_thread_id;
+    std::string     current_thread_id_str;
+    std::string     current_stations_selection;
+    std::string     current_tracks_selection;
+
     
-    std::thread::id vlc_twatch_id;
+    //std::thread::id vlc_twatch_id;
     
-    std::map<Glib::ustring,Glib::ustring> m_appsettings{};
-    std::map<unsigned int, s_station> m_stations{};
-    std::vector<std::string> v_recentstations{};
-    
-    std::map<unsigned int, s_track> m_tracklist{};
-    
-    unsigned int current_track_id{0};
-    std::string current_station;
-    std::string current_track_artist;
-    std::string current_track_title;
 public:
     SessionControl();
     SessionControl(const SessionControl& orig);
     virtual ~SessionControl();
     
-    int init_with_keyfile ();
+    gats::Stations stations;
+    gats::Tracks tracks;
+    
+    /**
+     * @brief Init the session with the settings defined in 'init.keyfile'
+     * @return int 0 = success
+     */
+    int init_with_keyfile();
+    
+    /**
+     * @brief Called by init_with_keyfile(): reads a specific keyfile group
+     * @return bool success
+     */
     bool read_keyfile_group (const Glib::KeyFile &keyfile,
                              const Glib::ustring &group,
                              std::map<Glib::ustring,Glib::ustring> &map
     );
+    
+    /**
+     * @brief Called by init_with_keyfile(): reads a specific keyfile group
+     * with language-specific definitions
+     * @return bool success
+     */
     bool read_keyfile_group_locale (const Glib::KeyFile &keyfile,
                              const Glib::ustring &group,
                              std::map<Glib::ustring,Glib::ustring> &map,
                              const std::string &locale
     );
-    bool init_with_db_files();
-    bool read_db_station(std::map<unsigned int,s_station> &stations);
-    bool read_db_tracks(Json::Value &root);
     
-    void append_new_track(const unsigned int &id, const s_track &t)  { m_tracklist.emplace( id, t ); }
     /**
-     * @brief Writes the vector v_tracklist to db-file
+     * @brief Reading the ad hoc database-files: stations.db and track.json
+     * @return bool success
      */
-    bool write_db_tracks();
+    bool init_with_db_files();
+    
+    /**
+     * @brief Initialize a gats::s_track with the current radio track data
+     * @param gats::s_track& t
+     */
+    void init_with_current_track(gats::s_track& t);
+    
     
     /**
      * @brief
      * Init (Audio)Player-Interface
      */
     int init_player_interface();
+    
+    /**
+     * @brief Create all external paths on user-settings
+     * @return bool success
+     */
+    bool create_program_paths(std::map<Glib::ustring,Glib::ustring> &m);
     
     /**
      * @brief
@@ -119,11 +136,11 @@ public:
      * @brief
      * Load a new radio-station with the Player-Interface
      * 
-     * @param std::string radio-station url
+     * @param std::string radio-station address
      * @return int status
      */
-    int load_station (const std::string &station_address,
-                      const std::string &station_name);
+    
+    bool load_station(const std::string &station, const unsigned int &id);
     /**
      * @brief Invoke play for active player-interface
      */
@@ -136,11 +153,6 @@ public:
      * @brief Invoke stop for active player-interface
      */
     void player_stop();
-    /**
-     * @brief Set volume for active player-interface
-     * @param double volume
-     */
-    void set_volume(const double &vol);
     
     
     /**
@@ -159,14 +171,39 @@ public:
     void get_recent_stations(std::map<Glib::ustring,Glib::ustring> &stations);
     std::string get_current_artist();
     std::string get_current_title();
-    std::string get_current_station();
-    unsigned int get_current_track_id() { return ++current_track_id; };
+    std::string get_current_station_name();
     
-    std::map<unsigned int,s_station> get_stations();
-    s_station get_station_by_id(const unsigned int &id);
+    void play_station();
+    
+    /**
+     * @brief Exec xdg-open via system call
+     * @param std::string url
+     */
+    void open_url_xdg(const std::string &url);
+    
+    /**
+     * @brief Create a new thead-id and change current_thread_id
+     * @return std::string thread_id (pid_id)
+     */
+    std::string update_thread_id();
+        
+    /**
+     * @brief Called by MainWindow::on_btn_load_station() after a new station
+     * is selected by DialogStations
+     * @param struct gats::s_station
+     */
+    void set_current_station(const gats::s_station &s);
+    
+    /**
+     * @brief Set volume for active player-interface
+     * @param double volume
+     */
+    void set_volume(const double &vol);
+
     
     /* threads */
-    void t_vlc_trackwatch();
+    //void t_vlc_trackwatch();
+    void t_vlc_trackwatch(const std::string &t_id);
 
     /* signals */
     sigc::signal<void, std::string> signal_new_track;

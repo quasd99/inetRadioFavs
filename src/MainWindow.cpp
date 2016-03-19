@@ -15,16 +15,12 @@
 #include <gtkmm-3.0/gtkmm/scalebutton.h>
 #include "MainWindow.h"
 #include "DialogStations.h"
+#include "stations.h"
 
 MainWindow::MainWindow()
 : Gtk::Window()
 {
-    int status = init_session();
-    std::cout << __FUNCTION__ << ":init_session:status:" << status << std::endl;
-    // TODO default-values if cannot read keyfile
-    
-    status = init_gui();
-    std::cout << __FUNCTION__ << ":init_gui:status:" << status << std::endl;
+    init();
 }
 
 MainWindow::MainWindow(const MainWindow& orig) {
@@ -34,22 +30,44 @@ MainWindow::~MainWindow()
 {
     std::cout << "EXIT" << std::endl;
     
-    if (!controller.kill_vlc_pid())
+    if ( !controller.kill_vlc_pid() )
     {
         std::cerr << "ERR:" << __PRETTY_FUNCTION__
                   << ":cannot close vlc by pidfile"
                   << std::endl;
     }
     
-    if (!controller.write_db_tracks())
+    if ( !controller.tracks.write_db() )
     {
         std::cerr << "ERR:" << __PRETTY_FUNCTION__
                 << ":error writing tracks-db:"
                 << std::endl;
     }
+    
+    if ( !controller.stations.write_db() )
+    {
+        std::cerr << "ERR:" << __PRETTY_FUNCTION__
+                << ":error writing stations-db:"
+                << std::endl;
+    }
 }
 
-int
+void
+MainWindow::init()
+{
+    bool status = init_session();
+    if (!status)
+    {
+        std::cerr << "ERR:" << __PRETTY_FUNCTION__
+                << ":error init_session()"
+                << std::endl;
+    }
+    init_trackview();
+    init_gui();    
+    
+}
+
+bool
 MainWindow::init_session()
 {
    // init session
@@ -61,7 +79,7 @@ MainWindow::init_session()
                   << status
                   << std::endl;
         // TODO init_fallback ();
-        return 1;
+        return false;
     }
     
     if (!controller.init_with_db_files())
@@ -71,7 +89,7 @@ MainWindow::init_session()
                   << status
                   << std::endl;
         // TODO Backup?
-        return 2;
+        return false;
     }
     
     status = controller.init_player_interface();
@@ -81,35 +99,34 @@ MainWindow::init_session()
                   << ":init_player_interface"
                   << std::endl;
         // Try to fix it via gui
-        return 3;
+        return false;
     }
     
     controller.signal_new_track.connect(sigc::mem_fun(*this, 
-                                       &MainWindow::on_new_track));
-    
+                                       &MainWindow::on_event_new_track));
     btn_vol.btn_vol.set_value(0.8);
     
-    return 0;
+    return true;
 }
 
-int
+void
 MainWindow::init_gui()
 {
     set_title("InetRadioFavs");
     set_default_size(800, 600);
     
-    // menu
+   /* menu */
     mi_station_show_manager.set_label("Show Station Manager");
     mi_station_show_manager.signal_activate().connect(sigc::mem_fun(*this, 
-                                       &MainWindow::on_station_show_manager));
+                                       &MainWindow::on_menustation_show));
     mi_station_new_url.set_label("New Station Url");
     mi_station_new_url.signal_activate().connect(sigc::mem_fun(*this, 
-                                       &MainWindow::on_station_new_url));
+                                       &MainWindow::on_menustation_add));
     mi_station_new_pls.set_label("New Station Pls");
     mi_station_new_pls.signal_activate().connect(sigc::mem_fun(*this, 
                                        &MainWindow::on_station_new_pls));
     
-    /* ! show for all menu-items ! */
+    // ! show for all menu-items, show_all() doesn't work !
     mi_station_show_manager.show();
     menu_sep1.show();
     mi_station_new_url.show();
@@ -120,7 +137,7 @@ MainWindow::init_gui()
     menu_station.append(mi_station_new_url);
     menu_station.append(mi_station_new_pls);
     
-    /* mainbar */
+   /* mainbar */
     btn_settings.set_stock_id(Gtk::Stock::PROPERTIES);
     btn_load_station.set_stock_id(Gtk::Stock::ADD);
     btn_load_station.set_menu(menu_station);
@@ -141,140 +158,117 @@ MainWindow::init_gui()
                                               &MainWindow::on_volume_changed));
     mainbar.append(sep2);
     mainbar.append(lbl_station);
-    lbl_station.set_text("http://16bit.fm/play/16bit.fm_192.m3u"); // TODO recent
+    lbl_station.set_text(controller.get_current_station_name());
     
-    /* trackbar */
+   /* trackbar */
     btn_add_track.set_stock_id(Gtk::Stock::APPLY);
-    trackbar.append(btn_add_track, sigc::mem_fun(*this, &MainWindow::on_add_track));
+    trackbar.append(btn_add_track, sigc::mem_fun(*this, &MainWindow::on_btn_add_track));
     trackbar.append(sep3);
     trackbar.append(lbl_track);
     lbl_track.set_text("...");
-    
-    /* trackview */
-    init_trackview();
-    
-    /* container */
-    //hbox.set_orientation(Gtk::ORIENTATION_HORIZONTAL);
-    //hbox.pack_start (mainbar, Gtk::PACK_EXPAND_WIDGET, 0);
-
+        
     vbox.set_orientation(Gtk::ORIENTATION_VERTICAL);
-    //vbox.pack_start (hbox, Gtk::PACK_SHRINK, 0);
     vbox.pack_start (mainbar, Gtk::PACK_SHRINK, 0);
     vbox.pack_start (trackbar, Gtk::PACK_SHRINK, 0);
-    vbox.pack_start (scrolled_window, Gtk::PACK_EXPAND_WIDGET, 0);
-
+    
+   /* UiTextTreeView::tview - initialized by init_trackview() */
+    vbox.pack_start(*(tview.get_scrolled_window()), Gtk::PACK_EXPAND_WIDGET, 0);
+    
     add(vbox);
     show_all();
-    return 0;
 }
 
 bool
 MainWindow::init_trackview()
 {
+   /* init gui elements */
     tview.init();
-    scrolled_window.add(tview);
-    scrolled_window.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
+//    scrolled_window.add(tview);
+//    scrolled_window.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
     
-    Json::Value root;
-    if ( !controller.read_db_tracks(root) )
+    for (const auto &it : controller.tracks.m_tracks_db)
     {
-        return false;
+        gats::s_track t;
+        tview.add_track(it.second);
     }
+     
+//    for ( auto rit = controller.tracks.m_current_tracks_selection.rbegin() ; 
+//          rit!=controller.tracks.m_current_tracks_selection.rend() ; ++rit )
+//    {
+//        tview.add_track(rit->second);
+//    }
     
-    unsigned int highest_id = 0;
-    
-    for (const auto &id : root.getMemberNames())
-    {
-        s_track t;
-        t.id = stoi(id);
-        if (t.id > highest_id)
-        {
-            highest_id = t.id;
-        }
-        
-        for (const auto &member : root[id].getMemberNames())
-        {
-            if (member == "artist")
-            {
-                t.artist = root[id][member].asString();
-            }
-            else if (member == "title")
-            {
-                t.title = root[id][member].asString();
-            }
-            else if (member == "datetime")
-            {
-                t.datetime = root[id][member].asString();
-            }
-            else if (member == "station")
-            {
-                t.station = root[id][member].asString();
-            }
-            //std::cout << member << ":" << root[id][member].asString() << std::endl;
-        }
-        tview.add_track(t);
-        
-    }
-    
-    
-    
+    tview.signal_open_xdg_url.connect(sigc::mem_fun(controller, 
+                                      &SessionControl::open_url_xdg));
     return true;
 }
 
 void
 MainWindow::on_btn_settings()
 {
-    
+    // TODO
+    // Create Settings-Dialog
+    // +choose player interface
+    // +choose programs working path (maybe it will be used with a cloud-service)
+    // +import foreign station-db
+    // +import foreign tracks-db
+    // +Skins?
 }
 
 void
 MainWindow::on_btn_load_station()
 {
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
-    run_station_dialog();
-}
-
-void
-MainWindow::run_station_dialog()
-{
-    std::vector<std::string> list;
-    list.emplace_back("http://16bit.fm/play/16bit.fm_192.m3u");
-    list.emplace_back("http://evans.hochschulradio.rwth-aachen.de:8000/hoeren/high.m3u");
-    DialogStations dlg;
-    dlg.set_title("Select Station");
-    dlg.add_stations(controller.get_stations());
-    unsigned int station_id;
-    int status = dlg.exec(station_id);
-    switch (status)
+    gats::s_station s;
+    if (controller.stations.run_stations_dialog(s))
     {
-        case 0:
-            std::cout << "Abortion" << std::endl;
-            break;
-        case 1:
-            on_btn_stop();
-            s_station s = controller.get_station_by_id(station_id);
-            controller.load_station(s.address, s.name);
-            set_station_lbl(s.name);
-            on_btn_play();
-            
-            std::cout << "Station selected: " << s.name << std::endl;
-            break;
+        std::stringstream ss;
+        std::string sep = " | ";
+        ss << s.name     << sep
+           << s.homepage << sep
+           << s.genre    << sep
+           << s.country  << sep
+           << s.city;
+        set_lbl_station(ss.str());
+        
+        set_lbl_track("...");
+        
+        controller.set_current_station(s);
+        controller.player_play();
+        
+        std::cout << "Info: " << __PRETTY_FUNCTION__
+                  << "load station:"
+                  << s.name
+                  << std::endl;
+    }
+    else
+    {
+        std::cerr << "WARN:" << __PRETTY_FUNCTION__
+                  << ":Stations::run_stations_dialog aborted or error"
+                  << std::endl;
     }
 }
 
+
 void
-MainWindow::set_station_lbl(const std::string& station)
+MainWindow::set_lbl_station(const std::string& station)
 {
     lbl_station.set_text(station);
 }
 
 void
+MainWindow::set_lbl_track(const std::string& track)
+{
+    lbl_track.set_text(track);
+}
+
+void
 MainWindow::on_btn_play()
 {
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << std::endl;
     
+   // activate
     if (!is_playing)
-    { // activate, only Stop-Button & load_station deactivate is_playing
+    {
         is_playing = true;
         is_paused = false;
         btn_play.set_stock_id(Gtk::Stock::MEDIA_PAUSE);
@@ -300,11 +294,13 @@ MainWindow::on_btn_play()
 void
 MainWindow::on_btn_stop()
 {
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << std::endl;
+    
     btn_play.set_stock_id(Gtk::Stock::MEDIA_PLAY);
     is_playing = false;
     is_paused = false;
     controller.player_stop();
+    lbl_track.set_text("...");
 }
 
 void
@@ -316,67 +312,94 @@ MainWindow::on_volume_changed(double vol)
 void
 MainWindow::on_show_station_menu()
 {
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << std::endl;
 }
 
 void
-MainWindow::on_station_show_manager()
+MainWindow::on_menustation_show()
 {
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
-    run_station_dialog();
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << std::endl;
+    on_btn_load_station();
 }
 
 void
-MainWindow::on_station_new_url()
+MainWindow::on_menustation_add()
 {
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << std::endl;
+    
+    auto builder = Gtk::Builder::create();
+    try
+    {
+        builder->add_from_file("src/uidialognewstation.ui");
+    }
+    catch(const Glib::FileError& ex)
+    {
+        std::cerr << "  FileError: " << ex.what() << std::endl;
+        return;
+    }
+    catch(const Glib::MarkupError& ex)
+    {
+        std::cerr << "  MarkupError: " << ex.what() << std::endl;
+        return;
+    }
+    catch(const Gtk::BuilderError& ex)
+    {
+        std::cerr << "  BuilderError: " << ex.what() << std::endl;
+        return;
+    }
+    
+    gats::UiDialogNewStation *dlg = nullptr;
+    builder->get_widget_derived("dlg_new_station", dlg);
+    if ( dlg )
+    {
+        gats::s_station s;
+        if ( dlg->exec(s) )
+        {
+            s.datetime = controller.get_datetime();
+            controller.stations.add_new_station(s);
+        }
+    }
+    else
+    {
+        std::cerr << "ERR:" << __PRETTY_FUNCTION__
+                << ":cannot exec New Station Dialog"
+                << std::endl;
+    }
+    
+    delete dlg;
 }
 
 void
 MainWindow::on_station_new_pls()
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
+    // TODO: add local station-playlist
 }
 
 void
-MainWindow::on_new_track(std::string track)
+MainWindow::on_event_new_track(std::string track)
 {
-    std::cout << __PRETTY_FUNCTION__ << ":" << track << std::endl;
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << ":" << track << std::endl;
     lbl_track.set_text(track);
 }
 
 void
-MainWindow::on_add_track() 
+MainWindow::on_btn_add_track() 
 {
-    std::cout << __PRETTY_FUNCTION__ << ":" << std::endl;
+    gats::s_track t;
+    controller.init_with_current_track(t);
+    controller.tracks.add_track(t);
+    tview.add_track(t);
+    //scrolled_window.get_vadjustment()->set_value(-100);
+//    double value = scrolled_window.get_vadjustment()->get_value();
+//    double pg_sz = scrolled_window.get_vadjustment()->get_page_size();
+//    double pg_inc = scrolled_window.get_vadjustment()->get_page_increment();
     
-    s_track t;
-    t.id       = controller.get_current_track_id();
-    t.artist   = controller.get_current_artist();
-    t.title    = controller.get_current_title();
-    t.datetime = controller.get_datetime();
-    t.station  = controller.get_current_station();
+    scrolled_window.get_vadjustment()->set_value(-3000);
     
-    controller.append_new_track(t.id, t);
-    tview.add_track(t); 
+    std::cout << "Info:" << __PRETTY_FUNCTION__
+              << ":track added:"<< t.added_datetime << ":"
+              << "id:" << t.id << ":"
+              << t.artist << " - " << t.title
+              << std::endl;
 }
-
-//void
-//MainWindow::slot_row_activated(const Gtk::TreePath& path,
-//                                    Gtk::TreeViewColumn* column)
-//{
-//    std::cout << __PRETTY_FUNCTION__ << ":" << std::endl;
-//    Gtk::TreeModel::iterator iter = tree_model->get_iter (path); // row
-//    if (iter)
-//    {
-//        Gtk::TreeModel::Row row = *iter; // column
-//        selected_id = row[cols.col_id];
-//        std::cout << __FUNCTION__ << ":" << row[cols.col_artist] << std::endl;
-//    }
-//}
-//
-//void
-//MainWindow::on_btn_discogs()
-//{
-//    std::cout << __PRETTY_FUNCTION__ << ":" << std::endl;
-//}

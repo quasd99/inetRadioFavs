@@ -32,26 +32,28 @@
 SessionControl::SessionControl()
 {
     Glib::init();
-// pid
-    pid = (intmax_t) getpid();
-// tmp_dir, vlc_pid
+    
+   // pid
+    pid = (intmax_t)getpid();
+   // tmp_dir, vlc_pid
     user_tmpdir = Glib::get_tmp_dir();
     {
         std::stringstream ss;
         ss << user_tmpdir << "/irf" << pid << ".vlc.pid";
         app_vlc_pidfile = ss.str();
     }
-// home_dir, keyfile
+   // home_dir, keyfile
     user_homedir = Glib::get_home_dir();
     {
         std::stringstream ss;
-        ss << user_homedir << "/" << app_initkeyfile;
-        user_init_keyfile = ss.str();
+        ss << user_homedir << "/" << app_dir << "/" << app_initkeyfile;
+        app_initkeyfile = ss.str();
     }
 
-    std::cout << "pid:" << pid << std::endl;
-    std::cout << "app_vlc_pidfile:" << app_vlc_pidfile << std::endl;
-    std::cout << "user_init_keyfile:" << user_init_keyfile << std::endl;
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << std::endl
+              << "  pid:" << pid << std::endl
+              << "  app_vlc_pidfile:" << app_vlc_pidfile << std::endl
+              << "  app_initkeyfile:" << app_initkeyfile << std::endl;
 }
 
 SessionControl::SessionControl(const SessionControl& orig) {
@@ -60,16 +62,20 @@ SessionControl::SessionControl(const SessionControl& orig) {
 SessionControl::~SessionControl() {
 }
 
+
 void
-SessionControl::t_vlc_trackwatch()
+SessionControl::t_vlc_trackwatch(const std::string& t_id)
 {
     std::string track;
     get_vlc_metadata(track);
     
-    std::cout << "starting thread with:" << track << std::endl;
-    
+    std::cout << "Info:" << __PRETTY_FUNCTION__
+            << ":starting thread:" << t_id << ":"
+            << track
+            << std::endl;
+
     // TODO: while (unique thread-id)
-    while (true)
+    while (t_id == current_thread_id_str)
     {
         std::string now;
         get_vlc_metadata(now);
@@ -92,11 +98,20 @@ SessionControl::t_vlc_trackwatch()
             }
             
             signal_new_track.emit(track);
-            std::cout << "new track:" << track << std::endl;
+            std::cout << "Info:" << __PRETTY_FUNCTION__
+                    << ":new track:"
+                    << track
+                    << std::endl;
         }
         sleep(3);
     }
+    
+    std::cout << "Info:" << __PRETTY_FUNCTION__
+            << ":kill thread:"
+            << t_id
+            << std::endl;
 }
+
 
 int
 SessionControl::init_with_keyfile()
@@ -105,26 +120,26 @@ SessionControl::init_with_keyfile()
     Glib::KeyFile keyfile;
     try
     {
-        keyfile.load_from_file(user_init_keyfile);
+        keyfile.load_from_file(app_initkeyfile);
     }
     catch (Glib::FileError)
     {
         std::cerr << "ERR:" << __PRETTY_FUNCTION__
                   << "Glib::FileError:" 
-                  << user_init_keyfile << std::endl;
+                  << app_initkeyfile << std::endl;
         return 1;
     }
     catch (Glib::KeyFileError)
     {
         std::cerr << "ERR:" << __PRETTY_FUNCTION__
                   << "Glib::KeyFileError:"
-                  << user_init_keyfile << std::endl;
+                  << app_initkeyfile << std::endl;
         return 2;
     }
     
-// read startgroup
+   // read startgroup
     auto startgroup = keyfile.get_start_group();
-    if (!read_keyfile_group(keyfile, startgroup, m_appsettings))
+    if (!read_keyfile_group(keyfile, startgroup, m_programsettings))
     {
         std::cerr << "ERR:" << __PRETTY_FUNCTION__
                   << ":read_startgroup"
@@ -132,12 +147,27 @@ SessionControl::init_with_keyfile()
         return 3;                
     }
     
-    if (!m_appsettings["language"].empty())
-        app_lang = m_appsettings["language"];
+    std::string value = m_programsettings["language"];
+    if ( !value.empty() )
+    {
+        app_lang = value;
+    }
     else
+    {
         app_lang = "en";
+    }
     
-// read all groups
+    value = m_programsettings["player_interface"];
+    if ( !value.empty() )
+    {
+        app_player_interface = value;
+    }
+    else
+    {
+        app_player_interface = "cvlc_dbus";
+    }
+        
+   // read all groups
     auto groups = keyfile.get_groups();
     for (const auto &group : groups)
     {
@@ -145,17 +175,20 @@ SessionControl::init_with_keyfile()
         {
             continue;
         }
-        else if (group == "ui_description")
+        
+        if (group == "ui_description")
         {
-            if (!read_keyfile_group_locale(keyfile, group,m_appsettings, app_lang))
+            if (!read_keyfile_group_locale(keyfile, group,m_programsettings, app_lang))
             {
                 std::cerr << "ERR:" << __PRETTY_FUNCTION__
                           << ":read_keyfile_group:"
                           << group << std::endl;
                 return 4;
             }
+            continue;
         }
-        else if (!read_keyfile_group (keyfile, group, m_appsettings))
+        
+        if (!read_keyfile_group (keyfile, group, m_programsettings))
         {
             std::cerr << "ERR:" << __PRETTY_FUNCTION__
                       << ":read_keyfile_group:"
@@ -163,7 +196,14 @@ SessionControl::init_with_keyfile()
             return 6;                
         }
     }
-        
+    
+    /* create paths: all (user-defined) db-filepaths */
+    create_program_paths(m_programsettings);
+    
+    /* make the last session selections to current selection */
+    current_tracks_selection = m_programsettings["track_selection"];
+    current_stations_selection = m_programsettings["station_selection"];
+            
     return 0;
 }
 
@@ -180,12 +220,13 @@ SessionControl::read_keyfile_group (const Glib::KeyFile &keyfile,
     {
         if (group == "recent_stations")
         {
-            v_recentstations.emplace_back(key);
+            stations.add_station_to_recentlist(keyfile.get_uint64(group, key));
         }
         else
         {
             map.emplace(key, keyfile.get_string(group, key));
-            std::cout << group << ":" << key << ":" 
+            std::cout << "Info:" << __PRETTY_FUNCTION__ << ":"
+                      << group << ":" << key << ":" 
                       << keyfile.get_string(group, key) << std::endl;
         }
     }
@@ -214,15 +255,33 @@ SessionControl::read_keyfile_group_locale (const Glib::KeyFile &keyfile,
 bool
 SessionControl::init_with_db_files()
 {
-    if (!read_db_station(m_stations))
-    {
-        std::cerr << "ERR:" << __PRETTY_FUNCTION__ << std::endl;
-        return false;
-    }
+   /* stations */
+    std::cout << "Info:" << __PRETTY_FUNCTION__ 
+              << "app_db_station:"
+              << app_db_stations
+              << std::endl;
     
-    // TODO: read tracks
-    current_track_id = 0;
+    stations.set_path_db(app_db_stations);
+    stations.set_path_db_selections(app_db_stations_selections);
+    stations.init(); // = read app_db_station
     
+    unsigned int first_station_id = stations.get_recentlist_first();
+    set_current_station(stations.get_station_by_id(first_station_id));
+    
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << ":"
+              << "current_station" << current_station.name << std::endl;
+    
+   /* tracks */
+    std::cout << "Info:" << __PRETTY_FUNCTION__ 
+              << "app_db_tracks:"
+              << app_db_tracks
+              << std::endl;
+    
+    tracks.set_path_db(app_db_tracks);
+    
+    // read app_db_tracks and set the current selection to current_tracks_selection
+    tracks.init(current_tracks_selection); 
+
     return true;
 }
 
@@ -234,17 +293,22 @@ SessionControl::init_player_interface()
               << app_player_interface
               << std::endl;
     
-    if (get_player_interface() == "vlc_dbus")
+    if (get_player_interface() == "cvlc_dbus")
     {
     // command-string: start vlc without gui and as daemon
-        std::string cmd("killall vlc ; cvlc -d --pidfile ");
-        cmd += app_vlc_pidfile;
+        std::stringstream ss_cmd;
+        ss_cmd << "ps aux | grep -v grep | grep vlc > /dev/null ; "
+               << "if [ $? -eq 0 ] ; then killall vlc ; fi ; "
+               << "cvlc -d --pidfile "
+               << app_vlc_pidfile;
+                
+        std::string cmd{ss_cmd.str()};
     // exec
         int status = std::system(cmd.c_str());
         if (status != 0)
         {
             std::cerr << "ERR:" << __PRETTY_FUNCTION__
-                      << ":cannot start:" 
+                      << ":cannot exec:" 
                       << cmd 
                       << std::endl;
             return 1;
@@ -253,13 +317,13 @@ SessionControl::init_player_interface()
         vlc_dbus = new VlcDBusInterface();
         if (vlc_dbus->init() == 0)
         {
-            app_player_interface = "vlc_dbus";
+            app_player_interface = "cvlc_dbus";
         }
         else
         {
             app_player_interface = std::string();
             std::cerr << "ERR:" << __PRETTY_FUNCTION__
-                      << ":cannot init:vlc_dbus" 
+                      << ":cannot init:cvlc_dbus" 
                       << std::endl;
             return 2;
         }
@@ -267,12 +331,56 @@ SessionControl::init_player_interface()
     return 0;
 }
 
+bool
+SessionControl::create_program_paths( std::map<Glib::ustring,
+                                                     Glib::ustring> &m) 
+{
+    app_user_db_dir = m["app_user_db_dir"];
+    // TODO dir validation
+        
+    app_db_stations = m["db_stations"];
+    if (app_db_stations.empty())
+    {
+        std::cerr << "ERR:" << __PRETTY_FUNCTION__
+                << ":m_appsettings[\"db_stations\"].empty()"
+                << std::endl;
+    }
+   
+    app_db_tracks = m["db_tracks"];
+    if (app_db_tracks.empty())
+    {
+        std::cerr << "ERR:" << __PRETTY_FUNCTION__
+                << "m_appsettings[\"db_tracks\"].empty()"
+                << std::endl;
+    }
+    
+    app_db_stations_selections = m["db_stations_selections"];
+    if (app_db_stations.empty())
+    {
+        std::cerr << "ERR:" << __PRETTY_FUNCTION__
+                << ":m_appsettings[\"db_stations_selections\"].empty()"
+                << std::endl;
+    }
+   
+    app_db_tracks_selections = m["db_tracks_selections"];
+    if (app_db_tracks.empty())
+    {
+        std::cerr << "ERR:" << __PRETTY_FUNCTION__
+                << "m_appsettings[\"db_tracks_selections\"].empty()"
+                << std::endl;
+    }
+    
+    return true;
+}
+
+
+
 std::string
 SessionControl::get_player_interface()
 {
-    std::string ret = m_appsettings["player_interface"];
+    std::string ret = m_programsettings["player_interface"];
     if (ret.empty())
-        ret = "vlc_dbus"; 
+        ret = "cvlc_dbus"; 
     return ret;
 }
 
@@ -309,30 +417,65 @@ SessionControl::kill_vlc_pid()
     }
 }
 
-int
-SessionControl::load_station (const std::string &station_address,
-                              const std::string &station_name)
+void
+SessionControl::open_url_xdg(const std::string& url)
 {
-    std::cout << "Info:" << __PRETTY_FUNCTION__ << ":"
-              << app_player_interface << ":"
-              << station_address
-              << std::endl;
-
-    if (app_player_interface == "vlc_dbus")
-    {
-        vlc_dbus->open_uri(station_address);
-                
-        std::thread track_watch(&SessionControl::t_vlc_trackwatch, this);
-        track_watch.detach();
-        vlc_twatch_id = track_watch.get_id();
-        // TODO: unique thread-id
-        std::cout << "thread_id:" << vlc_twatch_id << std::endl;
-    }
-    vlc_dbus->p_proxy->Volume(0.8);
-    current_station = station_name;
+    std::stringstream ss_cmd;
+    ss_cmd << "xdg-open \""
+           << url
+           << '"';
+    std::string cmd{ss_cmd.str()};
     
-    return 0;
+    int status = std::system(cmd.c_str());
+    if (status != 0)
+    {
+        std::cerr << "ERR:" << __PRETTY_FUNCTION__
+                << ":error exec:"
+                << cmd
+                << std::endl;
+    }
 }
+
+
+void
+SessionControl::play_station()
+{       
+    std::cout << "Info:" << __PRETTY_FUNCTION__
+            << ":station-address:"
+            << current_station.address
+            << std::endl;
+    
+    if (app_player_interface == "cvlc_dbus")
+    {
+        vlc_dbus->open_uri(current_station.address);
+        
+       // generate new thread-id
+        std::string t_id = update_thread_id();
+       // start thread
+        std::thread track_watch(&SessionControl::t_vlc_trackwatch, this, t_id);
+        track_watch.detach();
+    }
+}
+
+std::string
+SessionControl::update_thread_id()
+{
+    current_thread_id++;
+    
+    std::stringstream ss_id;
+    ss_id << pid << "_" << current_thread_id;
+    
+    current_thread_id_str = ss_id.str();
+    
+    std::cout << "Info:" << __PRETTY_FUNCTION__
+            << ":new current_thread_id_str:"
+            << current_thread_id_str
+            << std::endl;
+    
+    return current_thread_id_str;
+}
+
+
 
 void
 SessionControl::get_vlc_metadata(std::string &ret)
@@ -342,12 +485,12 @@ SessionControl::get_vlc_metadata(std::string &ret)
      * using system-call instead
      */
         
-// response-file
+   // response-file
     std::stringstream ss_respfile;
     ss_respfile << user_tmpdir << "/irf" << pid << ".metadata";
     std::string respfile(ss_respfile.str());
 
-// call mdbus2 and write response to file
+   // call mdbus2 and write response to file
     std::stringstream ss_cmd;
     ss_cmd << "mdbus2 "
            << "org.mpris.MediaPlayer2.vlc "
@@ -356,28 +499,37 @@ SessionControl::get_vlc_metadata(std::string &ret)
            << "org.mpris.MediaPlayer2.Player Metadata"
            << " > " << respfile;
     std::string cmd(ss_cmd.str());
-// exec
+   // exec
     int status = std::system(cmd.c_str()); // mdbus2 returns 255 ...
-    //std::cout << "status:" << status << std::endl;
-// read response
+    if (status == 0)
+    {
+        std::cerr << "ERR:" << __PRETTY_FUNCTION__
+                << ":error calling mdbus2:"
+                << std::endl;        
+    }
+    
+   // read response
     std::ifstream f_resp(respfile);
     if (f_resp)
     {   
-    // read response file
-        std::stringstream ss; ss << f_resp.rdbuf();
+       // read response file
+        std::stringstream ss;
+        ss << f_resp.rdbuf();
+        
         std::string str_resp(ss.str());
-    // searchstring to extract trackinfo
-        std::string str_find1("'vlc:nowplaying': <'");
-        std::string str_find2("'>, 'vlc:pub");
+       // searchstring to extract trackinfo
+        std::string str_find1("'vlc:nowplaying': <");
+        std::string str_find2(">, 'vlc:pub");
         std::size_t index1 = str_resp.find(str_find1, 0);
         if (index1 == std::string::npos)
         {
-            std::cerr << "ERR:" << __PRETTY_FUNCTION__
-                      << ":cannot find:vlc:nowplaying" 
-                      << std::endl;                    
+            std::cerr << "WARN:" << __PRETTY_FUNCTION__
+                      << ":cannot find:vlc:nowplaying" << std::endl << "  "
+                      << str_resp;                    
             return;
         }
-        index1 += str_find1.length();
+        index1 += str_find1.length() + 1;
+        
         std::size_t index2 = str_resp.find(str_find2, 0);
         if (index2 == std::string::npos)
         {
@@ -386,9 +538,10 @@ SessionControl::get_vlc_metadata(std::string &ret)
                       << std::endl;                    
             return;
         }
-    // extract trackinfo
+        index2--;
+        
+       // extract trackinfo
         std::string trackinfo(str_resp.substr(index1, index2 - index1));
-        //std::cout << "trackinfo:" << trackinfo << std::endl;
         ret = trackinfo;
     }
     else
@@ -405,16 +558,16 @@ void
 SessionControl::player_play()
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
-    if (app_player_interface == "vlc_dbus")
+    if (app_player_interface == "cvlc_dbus")
     {
-        vlc_dbus->p_proxy->Play();
+        play_station();
     }
 }
 void
 SessionControl::player_pause()
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
-    if (app_player_interface == "vlc_dbus")
+    if (app_player_interface == "cvlc_dbus")
     {
         vlc_dbus->p_proxy->Pause();
     }
@@ -423,9 +576,12 @@ void
 SessionControl::player_stop()
 {
     std::cout << __PRETTY_FUNCTION__ << std::endl;
-    if (app_player_interface == "vlc_dbus")
+    if (app_player_interface == "cvlc_dbus")
     {
         vlc_dbus->p_proxy->Stop();
+        
+        // stop t_vlc_trackwatch by changing current_thread_id
+        current_thread_id_str = std::string();
     }
 }
 
@@ -455,125 +611,7 @@ SessionControl::get_recent_stations(std::map<Glib::ustring,Glib::ustring> &stati
 std::string
 SessionControl::get_datetime()
 {
-    return Glib::DateTime::create_now_local().format("%F");
-}
-
-bool
-SessionControl::read_db_station(std::map<unsigned int,s_station> &stations)
-{
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
-    
-    std::stringstream ss_db;
-    ss_db << user_homedir << "/" << app_dir << "/" << app_db_station;
-    std::ifstream f_db;
-    f_db.open(ss_db.str());
-    
-    if (!f_db)
-    {
-        std::cerr << "ERR:" << __PRETTY_FUNCTION__
-                  << ":cannot open:" 
-                  << ss_db.str()
-                  << std::endl;        
-        return false;
-    }
-    
-    for (std::string buf; std::getline(f_db, buf); )
-    {
-        if (buf.empty())
-        { // skip empty lines
-            continue;
-        }
-        std::vector<std::string> v_tokens;
-        boost::split(v_tokens, buf, boost::is_any_of("\t"),
-                     boost::token_compress_on);
-       
-        if (v_tokens.size() == 8)
-        {
-            s_station s;
-            s.id       = std::stoi(v_tokens[0]);
-            s.name     = v_tokens[1];
-            s.address  = v_tokens[2];
-            s.datetime = v_tokens[3];
-            s.genre    = v_tokens[4];
-            s.country  = v_tokens[5];
-            s.city     = v_tokens[6];
-            
-            // read tags
-            boost::split(s.tags, v_tokens[7], boost::is_any_of("\t"),
-                         boost::token_compress_on);
-            
-            m_stations.emplace(s.id, s);
-            std::cout << "added:" << s.name << std::endl;
-        }
-        else
-        {
-            std::cerr << "ERR:" << __PRETTY_FUNCTION__
-                    << ":corrupt line, station_db_tokens:"
-                    << v_tokens.size()
-                    << std::endl;
-        }
-    }
-    
-    return true;
-}
-
-bool
-SessionControl::read_db_tracks(Json::Value &root)
-{
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
-    
-    // file-handling
-    std::stringstream ss_db;
-    ss_db << user_homedir << "/" << app_dir << "/" << app_db_tracks;
-    std::ifstream f_db;
-    f_db.open(ss_db.str());
-    
-    if (!f_db)
-    {
-        std::cerr << "ERR:" << __PRETTY_FUNCTION__
-                  << ":cannot open:" 
-                  << ss_db.str()
-                  << std::endl;        
-        return false;
-    }
-    
-    // read json
-    Json::Reader reader;
-    
-    bool parsingSuccessful = reader.parse( f_db, root );
-    if ( !parsingSuccessful )
-    {
-        std::cerr << "ERR:" << __PRETTY_FUNCTION__
-                << ":cannot parse json:" << ss_db << ":"
-                << reader.getFormattedErrorMessages()
-                << std::endl;
-        return false;
-    }
-    
-    if ( root.empty() )
-    {
-        std::cerr << "ERR:" << __PRETTY_FUNCTION__
-                << ":empty json:"
-                << std::endl;
-        return false;
-    }
-    
-    return true;
-}
-
-
-std::map<unsigned int,s_station>
-SessionControl::get_stations()
-{
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
-    return m_stations;
-}
-
-s_station
-SessionControl::get_station_by_id(const unsigned int &id)
-{
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
-    return m_stations.at(id);
+    return Glib::DateTime::create_now_local().format("%F_%T");
 }
 
 std::string
@@ -591,78 +629,34 @@ SessionControl::get_current_title()
 }
 
 std::string
-SessionControl::get_current_station()
+SessionControl::get_current_station_name()
 {
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
-    return current_station;
+    
+    return current_station.name;
 }
 
 void SessionControl::get_volume()
 {
 }
 
-bool
-SessionControl::write_db_tracks()
+void
+SessionControl::set_current_station(const gats::s_station& s)
 {
-    std::cout << __PRETTY_FUNCTION__ << std::endl;
-    
-    if (m_tracklist.empty())
-    {
-        // no new tracks
-        return true;
-    }
-    else
-    {
-        std::cout << "  new tracks added:" << m_tracklist.size() << std::endl;
-    }
-    
-    std::stringstream ss_tracks;
-    ss_tracks << user_homedir << "/" << app_dir << "/" << app_db_tracks;
+    current_station = s;
+}
 
-    std::ofstream f_out;
-    f_out.open(ss_tracks.str().c_str(), std::ios::app);
-    
-    if (!f_out)
-    {
-        std::cerr << "ERR:" << __PRETTY_FUNCTION__
-                << ":cannot open to write:"
-                << ss_tracks.str()
-                << std::endl;
-        return false;
-    }
-    
-    // create JSON
-    Json::Value root;
-    
-    for (const auto &it : m_tracklist)
-    {
-        // standard-infos
-        std::string id = std::to_string(it.first);
-        root[ id ]["id"] = id;
-        root[ id ]["artist"] = it.second.artist;
-        root[ id ]["title"] = it.second.title;
-        root[ id ]["datetime"] = it.second.datetime;
-        root[ id ]["station"] = it.second.station;
-        
-        // extended-infos
-        if (!it.second.year.empty())
-        {
-            root[ id ]["year"] = it.second.year;
-        }
-        
-        if (!it.second.url_discogs.empty())
-        {
-            root[ id ]["url_discogs"] = it.second.url_discogs;
-        }
-        
-        if (!it.second.url_youtube.empty())
-        {
-            root[ id ]["url_youtube"] = it.second.url_youtube;
-        }
-    }
-    
-    f_out << root;
-    f_out.close();
-    
-    return true;
+void
+SessionControl::init_with_current_track(gats::s_track& t)
+{
+    t = gats::s_track{ tracks.get_new_track_id(),
+            get_current_artist(),
+            get_current_title(),
+            get_current_station_name(),
+            get_datetime()
+    };            
+    //    t.id       = get_current_track_id();
+    //    t.artist   = get_current_artist();
+    //    t.title    = get_current_title();
+    //    t.station  = get_current_station_name();
+    //    t.datetime = get_datetime();
 }

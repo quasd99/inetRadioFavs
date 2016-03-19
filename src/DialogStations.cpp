@@ -22,9 +22,17 @@ DialogStations::DialogStations()
   scrolled_window(),
   tree_model(Gtk::TreeStore::create(cols))
 {
-    set_default_size(800, 600);
+    set_default_size(1000, 600);
+    
+    //set_activate_on_single_click(true);
     
     tview.set_model(tree_model);
+    tview.set_border_width(1);
+    tview.set_enable_search(true);
+    tview.set_grid_lines(Gtk::TREE_VIEW_GRID_LINES_BOTH);
+    tview.set_headers_clickable(true);
+    tview.set_rubber_banding(true);
+    tview.set_rules_hint(true);
     tview.append_column("Name", cols.col_name);
     tview.append_column("Address", cols.col_address);
     tview.append_column("Genre", cols.col_genre);
@@ -50,11 +58,11 @@ DialogStations::DialogStations()
     show_all();    
 }
 
-DialogStations::DialogStations(const DialogStations& orig) {
-}
-
-DialogStations::~DialogStations() {
-}
+//DialogStations::DialogStations(const DialogStations& orig) {
+//}
+//
+//DialogStations::~DialogStations() {
+//}
 
 int
 DialogStations::exec(unsigned int &id)
@@ -77,7 +85,7 @@ DialogStations::exec(unsigned int &id)
 }
 
 void
-DialogStations::add_stations(const std::map<unsigned int,s_station> &m_stations)
+DialogStations::add_stations(const std::map<unsigned int, gats::s_station> &m_stations)
 {
     std::cout << "Debug:" << __FUNCTION__ << std::endl;
     for (const auto &it : m_stations)

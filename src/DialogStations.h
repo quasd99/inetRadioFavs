@@ -45,10 +45,10 @@ class DialogStations : public Gtk::Dialog
 
 public:
     DialogStations();
-    DialogStations(const DialogStations& orig);
-    virtual ~DialogStations();
-    
-    void add_stations(const std::map<unsigned int,s_station> &m_stations);
+//    DialogStations(const DialogStations& orig);
+//    virtual ~DialogStations();
+        
+    void add_stations(const std::map<unsigned int, gats::s_station> &m_stations);
     int exec(unsigned int &station_id);
 private:
 protected:

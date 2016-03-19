@@ -13,7 +13,11 @@ namespace gats
         UiExtTreeview();
         bool init();
         void add_track(const s_track &t);
-
+        
+        
+        Gtk::ScrolledWindow* get_scrolled_window() { return scrolled_window; };
+        
+        sigc::signal<void, std::string> signal_open_xdg_url;
     protected:
         // Override Signal handler:
         // Alternatively, use signal_button_press_event().connect_notify()
@@ -23,8 +27,6 @@ namespace gats
         void on_menu_file_popup_generic();
         
         unsigned int selected_id;
-        void slot_row_activated(const Gtk::TreePath &path,
-                                Gtk::TreeViewColumn *column);
     
         // trackview
         class Columns : public Gtk::TreeModel::ColumnRecord
@@ -33,26 +35,32 @@ namespace gats
             Columns() {
                 add(col_id);
                 add(col_btn_discogs);
+                add(col_btn_youtube);
                 add(col_artist);
                 add(col_title);
-                add(col_datetime);
+                add(col_added_datetime);
                 add(col_station);
-
             }
             ~Columns() {}
             Gtk::TreeModelColumn<unsigned int> col_id; // hidden
             Gtk::TreeModelColumn<Glib::RefPtr<Gdk::Pixbuf>> col_btn_discogs;
-            Gtk::TreeModelColumn<Glib::ustring> col_artist;
-            Gtk::TreeModelColumn<Glib::ustring> col_title;
-            Gtk::TreeModelColumn<Glib::ustring> col_datetime;
-            Gtk::TreeModelColumn<Glib::ustring> col_station;        
+            Gtk::TreeModelColumn<Glib::RefPtr<Gdk::Pixbuf>> col_btn_youtube;
+            //<Gtk::Button*> col_btn_youtube;
+            Gtk::TreeModelColumn<std::string> col_artist;
+            Gtk::TreeModelColumn<std::string> col_title;
+            Gtk::TreeModelColumn<std::string> col_added_datetime;
+            Gtk::TreeModelColumn<std::string> col_station;        
         };
         
         //Gtk::TreeView  tview;
         Columns cols;
         Glib::RefPtr<Gtk::TreeStore> tree_model;
-        
         Gtk::Menu popup_title;
+        Gtk::ScrolledWindow* scrolled_window;
+        
+        // slots
+        void slot_row_activated(const Gtk::TreeModel::Path& path, 
+                                Gtk::TreeViewColumn* column);
     };
 
 } // namespace gats
