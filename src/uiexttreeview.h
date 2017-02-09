@@ -6,7 +6,6 @@
 
 namespace gats
 {
- 
     class UiExtTreeview : public Gtk::TreeView
     {
     public:
@@ -14,8 +13,9 @@ namespace gats
         bool init();
         void add_track(const s_track &t);
         
-        
         Gtk::ScrolledWindow* get_scrolled_window() { return scrolled_window; };
+        void set_tracks_db(std::map<unsigned int, s_track> &list);
+        std::vector<unsigned int> delete_rows(); 
         
         sigc::signal<void, std::string> signal_open_xdg_url;
     protected:
@@ -33,28 +33,28 @@ namespace gats
         {
         public:
             Columns() {
-                add(col_id);
-                add(col_btn_discogs);
-                add(col_btn_youtube);
-                add(col_artist);
-                add(col_title);
-                add(col_added_datetime);
-                add(col_station);
+                add(id);
+                add(btn_discogs);
+                add(btn_youtube);
+                add(artist);
+                add(title);
+                add(added_datetime);
+                add(station);
             }
             ~Columns() {}
-            Gtk::TreeModelColumn<unsigned int> col_id; // hidden
-            Gtk::TreeModelColumn<Glib::RefPtr<Gdk::Pixbuf>> col_btn_discogs;
-            Gtk::TreeModelColumn<Glib::RefPtr<Gdk::Pixbuf>> col_btn_youtube;
+            Gtk::TreeModelColumn<unsigned int> id; // hidden
+            Gtk::TreeModelColumn<Glib::RefPtr<Gdk::Pixbuf>> btn_discogs;
+            Gtk::TreeModelColumn<Glib::RefPtr<Gdk::Pixbuf>> btn_youtube;
             //<Gtk::Button*> col_btn_youtube;
-            Gtk::TreeModelColumn<std::string> col_artist;
-            Gtk::TreeModelColumn<std::string> col_title;
-            Gtk::TreeModelColumn<std::string> col_added_datetime;
-            Gtk::TreeModelColumn<std::string> col_station;        
+            Gtk::TreeModelColumn<std::string> artist;
+            Gtk::TreeModelColumn<std::string> title;
+            Gtk::TreeModelColumn<std::string> added_datetime;
+            Gtk::TreeModelColumn<std::string> station;
         };
         
         //Gtk::TreeView  tview;
-        Columns cols;
-        Glib::RefPtr<Gtk::TreeStore> tree_model;
+        Columns columns;
+        Glib::RefPtr<Gtk::TreeStore> treemodel;
         Gtk::Menu popup_title;
         Gtk::ScrolledWindow* scrolled_window;
         

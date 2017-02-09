@@ -56,6 +56,10 @@ class MainWindow : public Gtk::Window
     Gtk::SeparatorToolItem sep3;
     gats::UiToolLabel lbl_track;
     
+   // tview-control
+    Gtk::Box hbox_tviewcontrol;
+    Gtk::Button btn_tview_delete{Gtk::Stock::DELETE};
+    
    // states
     bool is_playing{false};
     bool is_paused{false};
@@ -115,6 +119,8 @@ protected:
     void on_event_new_track(std::string track);
    // trackbar set-method
     void set_lbl_track(const std::string &track);
+    
+    void on_btn_tview_delete();
     
    /* trackview elements */
     gats::UiExtTreeview tview;

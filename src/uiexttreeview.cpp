@@ -17,17 +17,18 @@ UiExtTreeview::init()
     set_headers_clickable(true);
     set_rubber_banding(true);
     set_rules_hint(true);
+    get_selection()->set_mode(Gtk::SELECTION_MULTIPLE);
     
     // treeview
-    tree_model = Gtk::TreeStore::create(cols);
-    set_model(tree_model);
+    treemodel = Gtk::TreeStore::create(columns);
+    set_model(treemodel);
     
-    append_column("DC", cols.col_btn_discogs);
-    append_column("YT", cols.col_btn_youtube);
-    append_column("Artist", cols.col_artist);
-    append_column("Title", cols.col_title);
-    append_column("Added", cols.col_added_datetime);
-    append_column("Station", cols.col_station);
+    append_column("DC", columns.btn_discogs);
+    append_column("YT", columns.btn_youtube);
+    append_column("Artist", columns.artist);
+    append_column("Title", columns.title);
+    append_column("Added", columns.added_datetime);
+    append_column("Station", columns.station);
     
     set_activate_on_single_click(true);
     signal_row_activated().connect( sigc::mem_fun(this, 
@@ -55,20 +56,20 @@ UiExtTreeview::add_track(const s_track& t)
               << ":" << t.artist << " - " << t.title
               << std::endl;
     
-    Gtk::TreeModel::Row row = *(tree_model->prepend());
-    //Gtk::TreeModel::Row row = *(tree_model->append());
+    Gtk::TreeModel::Row row = *(treemodel->prepend());
     
     auto pbuf_dc = Gdk::Pixbuf::create_from_file("/home/fra/discogs.png");
     auto pbuf_yt = Gdk::Pixbuf::create_from_file("/home/fra/youtube.png");
-    row[cols.col_btn_discogs]    = pbuf_dc;
-    row[cols.col_btn_youtube]    = pbuf_yt;
-    row[cols.col_id]             = t.id;
-    row[cols.col_artist]         = t.artist;
-    row[cols.col_title]          = t.title;
-    row[cols.col_added_datetime] = t.added_datetime;
-    row[cols.col_station]        = t.station;
+    row[columns.btn_discogs]    = pbuf_dc;
+    row[columns.btn_youtube]    = pbuf_yt;
+    row[columns.id]             = t.id;
+    row[columns.artist]         = t.artist;
+    row[columns.title]          = t.title;
+    row[columns.added_datetime] = t.added_datetime;
+    row[columns.station]        = t.station;
     
-    //scrolled_window->get_vadjustment()->set_value(-24);
+    // scroll automatically to new row
+    scroll_to_row(Gtk::TreePath(row));
 }
 
 
@@ -101,7 +102,7 @@ void UiExtTreeview::on_menu_file_popup_generic()
     if(iter)
     {
         // row by id
-        int id = (*iter)[cols.col_id];
+        int id = (*iter)[columns.id];
         // column
         
         std::cout << "  Selected ID=" << id << std::endl;
@@ -112,20 +113,18 @@ void UiExtTreeview::on_menu_file_popup_generic()
 void
 UiExtTreeview::slot_row_activated(const Gtk::TreePath& path,
                                   Gtk::TreeViewColumn* column)
-{
-    std::cout << "Info:" << __PRETTY_FUNCTION__ << std::endl;
-    
-    auto iter = tree_model->get_iter(path);
+{   
+    auto iter = treemodel->get_iter(path);
     unsigned int track_id = 0;
     std::string artist;
     std::string title;
     if (iter)
     {
-        track_id = (*iter)[cols.col_id];
-        artist = (*iter)[cols.col_artist];
+        track_id = (*iter)[columns.id];
+        artist = (*iter)[columns.artist];
         std::replace( artist.begin(), artist.end(), ' ', '+');
         std::replace( artist.begin(), artist.end(), '&', '+');
-        title = (*iter)[cols.col_title];
+        title = (*iter)[columns.title];
         std::replace( title.begin(), title.end(), ' ', '+');
         std::replace( title.begin(), title.end(), '&', '+');
     }
@@ -155,5 +154,71 @@ UiExtTreeview::slot_row_activated(const Gtk::TreePath& path,
         ss_url << artist << "+" << title << std::endl;
         signal_open_xdg_url.emit(ss_url.str());
     }
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << ":" << track_id << std::endl;
+}
+
+void
+UiExtTreeview::set_tracks_db(std::map<unsigned int, s_track>& list)
+{
+    // delete old data
+    treemodel->clear();
     
+    // detach from tview
+    Glib::RefPtr<Gtk::TreeModel> none;
+    this->set_model(none);
+    
+    // load data
+    for (const auto &track : list)
+    {
+        Gtk::TreeModel::Row row = *(treemodel->prepend());
+
+        auto pbuf_dc = Gdk::Pixbuf::create_from_file("/home/fra/discogs.png");
+        auto pbuf_yt = Gdk::Pixbuf::create_from_file("/home/fra/youtube.png");
+        row[columns.btn_discogs]    = pbuf_dc;
+        row[columns.btn_youtube]    = pbuf_yt;
+        row[columns.id]              = track.first;
+        row[columns.artist]         = track.second.artist;
+        row[columns.title]          = track.second.title;
+        row[columns.added_datetime] = track.second.added_datetime;
+        row[columns.station]        = track.second.station;
+    }
+        
+    // attach model again
+    this->set_model(treemodel);
+}
+
+
+std::vector<unsigned int>
+UiExtTreeview::delete_rows()
+{
+    // return vector
+    std::vector<unsigned int> ret_track_ids;
+    // row references
+    std::vector<Gtk::TreeModel::RowReference> rows;
+    
+    auto selection = this->get_selection();
+    for (auto rowpath : selection->get_selected_rows())
+    {
+        // save reference
+        rows.emplace_back(Gtk::TreeModel::RowReference(treemodel, rowpath));
+        
+        // get the track id from the row
+        auto it = treemodel->get_iter(rowpath);
+        if (it)
+        {
+            ret_track_ids.emplace_back((*it)[columns.id]);
+        }
+    }
+    
+    // remove the row-references from treemodel
+    for (auto &it : rows)
+    {
+        auto treeiter = treemodel->get_iter(it.get_path());
+        if (treeiter)
+        {
+            treemodel->erase(treeiter);
+        }   
+    }
+    
+    return std::move(ret_track_ids);
 }

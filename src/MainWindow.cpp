@@ -174,6 +174,14 @@ MainWindow::init_gui()
    /* UiTextTreeView::tview - initialized by init_trackview() */
     vbox.pack_start(*(tview.get_scrolled_window()), Gtk::PACK_EXPAND_WIDGET, 0);
     
+   /* tview control */
+    hbox_tviewcontrol.set_orientation(Gtk::ORIENTATION_HORIZONTAL);
+    btn_tview_delete.signal_clicked().connect(sigc::mem_fun(*this,
+                                             &MainWindow::on_btn_tview_delete));
+    hbox_tviewcontrol.pack_end(btn_tview_delete, Gtk::PACK_SHRINK, 0);
+    
+    vbox.pack_start(hbox_tviewcontrol, Gtk::PACK_SHRINK, 0);
+    
     add(vbox);
     show_all();
 }
@@ -183,20 +191,7 @@ MainWindow::init_trackview()
 {
    /* init gui elements */
     tview.init();
-//    scrolled_window.add(tview);
-//    scrolled_window.set_policy(Gtk::POLICY_AUTOMATIC, Gtk::POLICY_AUTOMATIC);
-    
-    for (const auto &it : controller.tracks.m_tracks_db)
-    {
-        gats::s_track t;
-        tview.add_track(it.second);
-    }
-     
-//    for ( auto rit = controller.tracks.m_current_tracks_selection.rbegin() ; 
-//          rit!=controller.tracks.m_current_tracks_selection.rend() ; ++rit )
-//    {
-//        tview.add_track(rit->second);
-//    }
+    tview.set_tracks_db(controller.tracks.m_tracks_db);
     
     tview.signal_open_xdg_url.connect(sigc::mem_fun(controller, 
                                       &SessionControl::open_url_xdg));
@@ -402,4 +397,19 @@ MainWindow::on_btn_add_track()
               << "id:" << t.id << ":"
               << t.artist << " - " << t.title
               << std::endl;
+}
+
+void
+MainWindow::on_btn_tview_delete()
+{
+    std::cout << "Info:" << __PRETTY_FUNCTION__ << "remove tracks:" << std::endl;
+    
+    auto track_ids = tview.delete_rows();
+    for (const auto &id : track_ids)
+    {
+        std::cout << " "  << id;
+        controller.tracks.remove_track(id);
+    }
+    
+    std::cout << std::endl;
 }
